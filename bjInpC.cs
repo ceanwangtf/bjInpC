@@ -405,7 +405,17 @@ public class FrdMesh
     {
         get { return _nodalResults; }
     }
-    
+
+    public ICollection<string> GetDiscoveredResultBlocks()
+    {
+        return _nodalResults.Keys;
+    }
+
+    public IEnumerable<string> GetAvailableResultBlocks()
+    {
+        return _nodalResults.Keys;
+    }
+
     public float[] GetNodalResult(string blockName, int nodeId)
     {
         Dictionary<int, float[]> block;
@@ -1348,6 +1358,157 @@ public class MainForm : Form
         this.Controls.Add(toolStrip);
         this.Controls.Add(menuStrip);
     }
+    private void BuildDynamicToolStripUI(FrdMesh loadedMesh)
+    {
+        // 1. Clear out old dynamic result buttons (preserves standard file open buttons)
+        // Assumes your ToolStrip control name is 'toolStrip1'
+        for (int i = toolStrip.Items.Count - 1; i >= 0; i--)
+        {
+            // Adjust this if you want to keep permanent buttons like "Open File"
+            if (toolStrip.Items[i].Tag is string)
+            {
+                toolStrip.Items.RemoveAt(i);
+            }
+        }
+
+        // 2. Loop through every discovered result key block (e.g., DISP, STRESS, TEMP)
+        foreach (string blockName in loadedMesh.NodalResults.Keys)
+        {
+            // 3. Create a lightweight ToolStripButton
+            ToolStripButton blockButton = new ToolStripButton();
+            blockButton.Text = blockName;          // Display name (e.g., "DISP")
+            blockButton.Tag = blockName;           // Map data key identifier
+            blockButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
+            
+            // 4. Attach the common viewport switching click handler
+            blockButton.Click += DynamicBlockButton_Click;
+
+            // 5. Add the item to your toolbar layout line
+            toolStrip.Items.Add(blockButton);
+        }
+    }
+
+    private void DynamicBlockButton_Click(object sender, EventArgs e)
+    {
+        ToolStripButton clickedButton = sender as ToolStripButton;
+        string targetBlockName = clickedButton?.Tag as string;
+
+        // Assumes your global active mesh reference is named 'currentFrdMesh' 
+        // and your rendering panel control is 'myViewport'
+        if (targetBlockName != null && currentFrdMesh != null)
+        {
+            if (currentFrdMesh.NodalResults.TryGetValue(targetBlockName, out var dataset))
+            {
+                // Bind the active data table array map directly to your renderer properties
+                myViewport.NodeDisplacements = dataset;
+                
+                // Turn on structural warping calculations exclusively if reading "DISP" vectors
+                myViewport.ShowDeformed = (targetBlockName == "DISP");
+                
+                // Set default visibility triggers
+                myViewport.ShowNodes = true; 
+
+                // Force OpenGL viewport context canvas redraw
+                myViewport.Invalidate();
+            }
+        }
+    }
+
+    private void BuildDynamicUI(FrdMesh loadedMesh)
+    {
+        //test
+        // Clear out old dynamic buttons if a file was previously loaded
+        this.ResultPanel.Controls.Clear(); 
+
+        int verticalOffset = 10;
+
+        foreach (string blockName in loadedMesh.GetDiscoveredResultBlocks())
+        {
+            // 1. Create a button dynamically for each data type found (e.g., DISP, STRESS, TEMP)
+            Button resultButton = new Button();
+            resultButton.Text = "View {blockName}";
+            resultButton.Tag = blockName; // Keep track of the block identifier
+            resultButton.Location = new Point(10, verticalOffset);
+            resultButton.Size = new Size(120, 30);
+
+            // 2. Attach a shared event click handler
+            resultButton.Click += DynamicResultButton_Click;
+
+            // 3. Add the new button to your dashboard configuration panel
+            this.ResultPanel.Controls.Add(resultButton);
+
+            // Advance layout position for the next dynamic element
+            verticalOffset += 40; 
+        }
+    }
+
+    private void DynamicResultButton_Click(object sender, EventArgs e)
+    {
+        Button clickedButton = sender as Button;
+        string targetBlock = clickedButton?.Tag as string;
+
+        if (targetBlock != null && currentFrdMesh.NodalResults.TryGetValue(targetBlock, out var dataset))
+        {
+            // Bind the data field dynamically to your rendering control 
+            myViewport.NodeDisplacements = dataset;
+            myViewport.ShowDeformed = (targetBlock == "DISP"); 
+            
+            myViewport.Invalidate(); // Refresh the OpenGL view canvas
+        }
+    }
+    
+    private void ResultComboBox_SelectedIndexChanged(object sender, EventArgs e)
+    {
+        string selectedBlock = ResultComboBox.SelectedItem?.ToString();
+        if (string.IsNullOrEmpty(selectedBlock) || currentFrdMesh == null) return;
+
+        // Get all results associated with the selected block type
+        if (currentFrdMesh.NodalResults.TryGetValue(selectedBlock, out var dataset))
+        {
+            // Update your viewport configuration dynamically
+            if (selectedBlock == "DISP")
+            {
+                myViewport.NodeDisplacements = dataset;
+                myViewport.ShowDeformed = true;
+            }
+            else
+            {
+                // For other scalar/tensor data fields (like STRESS), map to color engine only
+                myViewport.ShowDeformed = false; 
+                // Feed the dataset to a general scalar engine property in your viewport
+                // myViewport.CurrentScalarField = dataset; 
+            }
+
+            // Force the OpenGL control to clear and redraw with the new visualization parameters
+            myViewport.Invalidate(); 
+        }
+    }
+    
+    private void OnFileLoaded(string filePath)
+    {
+        // 1. Load and parse the FRD file
+        FrdMesh mesh = FrdMesh.Load(filePath);
+        
+        // 2. Clear out any old dynamic UI elements
+        ResultComboBox.Items.Clear();
+        
+        // 3. Dynamically populate the ComboBox depending on what was found inside the file
+        foreach (string blockName in mesh.GetAvailableResultBlocks())
+        {
+            // Adds "DISP", "STRESS", "TEMP", etc., automatically based on file contents
+            ResultComboBox.Items.Add(blockName); 
+        }
+        
+        // 4. Select the first available item if any exist
+        if (ResultComboBox.Items.Count > 0)
+        {
+            ResultComboBox.SelectedIndex = 0;
+        }
+        else
+        {
+            MessageBox.Show("This FRD file contains a mesh but no nodal analysis results.");
+        }
+    }
 
     private void BtnOpenStl_Click(object sender, EventArgs e)
     {
@@ -1713,3 +1874,4 @@ public class MainForm : Form
         Application.Run(new MainForm());
     }
 }
+
