@@ -1395,16 +1395,17 @@ public class MainForm : Form
         this.Controls.Add(toolStrip);
         this.Controls.Add(menuStrip);
     }
+    
     private void BuildDynamicToolStripUI(FrdMesh loadedMesh)
     {
         // 1. Clear out old dynamic result buttons (preserves standard file open buttons)
         // Assumes your ToolStrip control name is 'toolStrip1'
-        for (int i = toolStrip.Items.Count - 1; i >= 0; i--)
+        for (int i = toolStrip1.Items.Count - 1; i >= 0; i--)
         {
             // Adjust this if you want to keep permanent buttons like "Open File"
-            if (toolStrip.Items[i].Tag is string)
+            if (toolStrip1.Items[i].Tag is string)
             {
-                toolStrip.Items.RemoveAt(i);
+                toolStrip1.Items.RemoveAt(i);
             }
         }
 
@@ -1421,7 +1422,7 @@ public class MainForm : Form
             blockButton.Click += DynamicBlockButton_Click;
 
             // 5. Add the item to your toolbar layout line
-            toolStrip.Items.Add(blockButton);
+            toolStrip1.Items.Add(blockButton);
         }
     }
     private void DynamicBlockButton_Click(object sender, EventArgs e)
@@ -1493,11 +1494,16 @@ public class MainForm : Form
                     //var mesh = FrdMesh.Load(path);
                     //var viewport = new OpenGLViewport(mesh) { Dock = DockStyle.Fill };
                     
-                    var mesh = FrdMesh.Load(ofd.FileName);
+                    currentFrdMesh = FrdMesh.Load(ofd.FileName);
                     
-                    glViewport.SetFrdMesh(mesh);
+                    glViewport.SetFrdMesh(currentFrdMesh);
 
                     SetStandardView("Iso");
+                    
+                    // C. Reconstruct tool bar button toggles dynamically
+                    //now
+                    BuildDynamicToolStripUI(currentFrdMesh);
+
                 }
                 catch (Exception ex)
                 {
