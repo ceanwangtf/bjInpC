@@ -427,6 +427,9 @@ public class FrdMesh
         var currentNodes = new List<int>();
         string currentBlockName = ""; // Track active nodal results block name
 
+        int activeResultNodeId = -1;
+        List<float> accumulatedValues = new List<float>();
+
         float[] min = { float.MaxValue, float.MaxValue, float.MaxValue };
         float[] max = { float.MinValue, float.MinValue, float.MinValue };
 
@@ -457,6 +460,10 @@ public class FrdMesh
                 {
                     mesh._nodalResults[currentBlockName] = new Dictionary<int, float[]>();
                 }
+                
+                Console.WriteLine("mode = 100");
+                Console.WriteLine("currentBlockName = "+currentBlockName);
+
                 continue;
             }
 
@@ -522,36 +529,62 @@ public class FrdMesh
                     }
                 }
             }
-            else if (mode == 100 && header == "-2")
+            else if (mode == 100)
             {
                 // Clean up glued minus signs in result floating point notations
-                string payload = line.Substring(3)
+                string payload = line
                     .Replace("E-", "E_").Replace("e-", "e_")
                     .Replace("-", " -")
                     .Replace("E_", "E-").Replace("e_", "e-");
 
                 string[] parts = payload.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length >= 2)
+                if (parts.Length == 0) continue;
+
+                // CalculiX uses "-1" or "-2" to signify a data line under block 100
+                if (parts[0] == "-1" || parts[0] == "-2")
                 {
-                    int nid;
-                    if (int.TryParse(parts[0], out nid))
+                    Console.WriteLine("-1 or -2 line");
+                    // Flush previous node results buffer if one was active
+                    if (activeResultNodeId != -1 && accumulatedValues.Count > 0)
                     {
-                        List<float> vals = new List<float>();
-                        for (int i = 1; i < parts.Length; i++)
+                        mesh._nodalResults[currentBlockName][activeResultNodeId] = accumulatedValues.ToArray();
+                    }
+
+                    // Initialize state for the new node block
+                    accumulatedValues.Clear();
+                    
+                    if (parts.Length >= 2 && int.TryParse(parts[1], out activeResultNodeId))
+                    {
+                        float v;
+                        for (int i = 2; i < parts.Length; i++)
                         {
-                            float v;
                             if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v))
                             {
-                                vals.Add(v);
+                                Console.WriteLine("v = {0}", v);
+                                accumulatedValues.Add(v);
                             }
                         }
-                        if (vals.Count > 0)
+                    }
+                }
+                else
+                {
+                    // This is a wrapped continuation line! Append float values to the current active node
+                    if (activeResultNodeId != -1)
+                    {
+                        Console.WriteLine("activeResultNodeId = {activeResultNodeId}");
+                        float v;
+                        for (int i = 0; i < parts.Length; i++)
                         {
-                            mesh._nodalResults[currentBlockName][nid] = vals.ToArray();
+                            if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+                            {
+                                Console.WriteLine("v = {0}", v);
+                                accumulatedValues.Add(v);
+                            }
                         }
                     }
                 }
             }
+
         }
 
         if (mesh.Nodes.Count > 0)
@@ -798,58 +831,6 @@ public class bjOpenGLViewport : Control
         Invalidate();
     }
     
-    
-    public void SetFrdMesh_old(FrdMesh frd)
-    {
-        if (frd == null) return;
-
-        bjFemMesh fem = new bjFemMesh();
-
-        // 1. Copy Nodes
-        foreach (var kvp in frd.Nodes)
-        {
-            float[] n = kvp.Value;
-            if (n != null && n.Length >= 3)
-            {
-                fem.Nodes[kvp.Key] = new bjFemNode
-                {
-                    Id = kvp.Key,
-                    X = n[0],
-                    Y = n[1],
-                    Z = n[2]
-                };
-            }
-        }
-
-        // 2. Copy precomputed Edges from FrdMesh
-        foreach (int[] edge in frd.Edges)
-        {
-            if (edge != null && edge.Length >= 2)
-            {
-                fem.Edges.Add(Tuple.Create(edge[0], edge[1]));
-            }
-        }
-
-        foreach (var el in frd.Elements)
-        {
-            int typeCode;
-            int.TryParse(el.ElementType, out typeCode);
-            var femEl = new bjFemElement
-            {
-                Id = el.Id,
-                ElementType = MapFrdTypeToInpType(typeCode)
-            };
-            femEl.NodeIds.AddRange(el.NodeIds);
-            fem.Elements.Add(femEl);
-        }
-
-        // 3. Compute CenterX, CenterY, CenterZ, and Scale for camera framing
-        fem.ComputeBoundsAndEdges();
-        fem.ComputeSurfaceTriangles();
-
-        this.currentMesh = fem;
-        this.Invalidate();
-    }
     
     public void SetFrdMesh(FrdMesh frd)
     {
@@ -1412,11 +1393,6 @@ public class MainForm : Form
                     //var viewport = new OpenGLViewport(mesh) { Dock = DockStyle.Fill };
                     
                     var mesh = FrdMesh.Load(ofd.FileName);
-                    //Console.WriteLine("Nodes  : {0}", mesh.Nodes.Count);
-                    //Console.WriteLine("Elems  : {0}", mesh.Elements.Count);
-                    //Console.WriteLine("Edges  : {0}", mesh.Edges.Count);
-                    //Console.WriteLine("Center : ({0}, {1}, {2})", mesh.CenterX, mesh.CenterY, mesh.CenterZ);
-                    //Console.WriteLine("Scale  : {0}", mesh.Scale);
                     
                     glViewport.SetFrdMesh(mesh);
 
