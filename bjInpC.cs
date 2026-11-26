@@ -406,7 +406,17 @@ public class FrdMesh
         get { return _nodalResults; }
     }
     
-    
+    public float[] GetNodalResult(string blockName, int nodeId)
+    {
+        Dictionary<int, float[]> block;
+        if (_nodalResults.TryGetValue(blockName.ToUpperInvariant(), out block))
+        {
+            float[] res;
+            if (block.TryGetValue(nodeId, out res))
+                return res;
+        }
+        return null;
+    }
     
     public static FrdMesh Load(string path)
     {
@@ -415,6 +425,7 @@ public class FrdMesh
         int mode = 0;
         int currentElemType = 0;
         var currentNodes = new List<int>();
+        string currentBlockName = ""; // Track active nodal results block name
 
         float[] min = { float.MaxValue, float.MaxValue, float.MaxValue };
         float[] max = { float.MinValue, float.MinValue, float.MinValue };
@@ -424,8 +435,31 @@ public class FrdMesh
             if (line.Length < 4) continue;
             string header = line.Substring(0, Math.Min(6, line.Length)).Trim();
 
+            // 1. Intercept state markers and mode switch definitions
             if (header == "2C" || header.StartsWith("2C")) { mode = 2; continue; }
             if (header == "3C" || header.StartsWith("3C")) { mode = 3; continue; }
+            if (header == "100C" || header.StartsWith("100C"))
+            {
+                mode = 100;
+                // Parse dataset name (typically positions 7-12 in standard CalculiX format, or trailing chars)
+                currentBlockName = "UNKNOWN";
+                if (line.Length >= 11)
+                {
+                    currentBlockName = line.Substring(6, Math.Min(6, line.Length - 6)).Trim().ToUpperInvariant();
+                }
+                else
+                {
+                    currentBlockName = line.Substring(4).Trim().ToUpperInvariant();
+                }
+                
+                // Initialize the sub-dictionary under mesh._nodalResults for this block name
+                if (!mesh._nodalResults.ContainsKey(currentBlockName))
+                {
+                    mesh._nodalResults[currentBlockName] = new Dictionary<int, float[]>();
+                }
+                continue;
+            }
+
             if (header == "-3")
             {
                 if (mode == 3)
@@ -437,6 +471,7 @@ public class FrdMesh
                 continue;
             }
 
+            // 2. Process active block mode payloads
             if (mode == 2 && header == "-1")
             {
                 // Separate glued minus signs (e.g. "1.23E+00-4.56E+00") while preserving "E-"
@@ -487,6 +522,36 @@ public class FrdMesh
                     }
                 }
             }
+            else if (mode == 100 && header == "-2")
+            {
+                // Clean up glued minus signs in result floating point notations
+                string payload = line.Substring(3)
+                    .Replace("E-", "E_").Replace("e-", "e_")
+                    .Replace("-", " -")
+                    .Replace("E_", "E-").Replace("e_", "e-");
+
+                string[] parts = payload.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2)
+                {
+                    int nid;
+                    if (int.TryParse(parts[0], out nid))
+                    {
+                        List<float> vals = new List<float>();
+                        for (int i = 1; i < parts.Length; i++)
+                        {
+                            float v;
+                            if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+                            {
+                                vals.Add(v);
+                            }
+                        }
+                        if (vals.Count > 0)
+                        {
+                            mesh._nodalResults[currentBlockName][nid] = vals.ToArray();
+                        }
+                    }
+                }
+            }
         }
 
         if (mesh.Nodes.Count > 0)
@@ -502,7 +567,7 @@ public class FrdMesh
         }
         return mesh;
     }
-
+        
     private static void FlushElement(FrdMesh mesh, int elemType, List<int> n)
     {
         if (n.Count == 0) return;
@@ -734,7 +799,7 @@ public class bjOpenGLViewport : Control
     }
     
     
-    public void SetFrdMesh(FrdMesh frd)
+    public void SetFrdMesh_old(FrdMesh frd)
     {
         if (frd == null) return;
 
@@ -783,6 +848,78 @@ public class bjOpenGLViewport : Control
         fem.ComputeSurfaceTriangles();
 
         this.currentMesh = fem;
+        this.Invalidate();
+    }
+    
+    public void SetFrdMesh(FrdMesh frd)
+    {
+        if (frd == null) return;
+        bjFemMesh fem = new bjFemMesh();
+
+        // 1. Copy Nodes geometry
+        foreach (var kvp in frd.Nodes)
+        {
+            float[] n = kvp.Value;
+            if (n != null && n.Length >= 3)
+            {
+                fem.Nodes[kvp.Key] = new bjFemNode
+                {
+                    Id = kvp.Key,
+                    X = n[0],
+                    Y = n[1],
+                    Z = n[2]
+                };
+            }
+        }
+
+        // 2. Copy precomputed element wireframe edges
+        foreach (int[] edge in frd.Edges)
+        {
+            if (edge != null && edge.Length >= 2)
+            {
+                fem.Edges.Add(Tuple.Create(edge[0], edge[1]));
+            }
+        }
+
+        // 3. Copy elements and map type tags
+        foreach (var el in frd.Elements)
+        {
+            int typeCode;
+            int.TryParse(el.ElementType, out typeCode);
+            var femEl = new bjFemElement
+            {
+                Id = el.Id,
+                ElementType = MapFrdTypeToInpType(typeCode)
+            };
+            femEl.NodeIds.AddRange(el.NodeIds);
+            fem.Elements.Add(femEl);
+        }
+
+        // 4. Extract and assign the newly parsed Nodal Displacements payload
+        // Checks standard CalculiX header permutations ('DISP' block name)
+        Dictionary<int, float[]> dispBlock;
+        if (frd.NodalResults.TryGetValue("DISP", out dispBlock))
+        {
+            this.NodeDisplacements = dispBlock;
+            this.ShowDeformed = true;
+            this.DisplacementScaleFactor = 20.0f; // Scale up default to amplify microscopic strains visibly
+        }
+        else
+        {
+            this.NodeDisplacements = new Dictionary<int, float[]>();
+            this.ShowDeformed = false;
+            this.DisplacementScaleFactor = 1.0f;
+        }
+
+        // 5. Compute geometry properties and layout boundaries
+        fem.ComputeBoundsAndEdges();
+        fem.ComputeSurfaceTriangles();
+        this.currentMesh = fem;
+
+        // 6. Recalculate color spectrum limits for shading loops
+        this.ComputeResultBounds();
+
+        // 7. Force UI graphics repaint execution
         this.Invalidate();
     }
 
