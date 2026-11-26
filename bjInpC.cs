@@ -454,8 +454,10 @@ public class FrdMesh
             if (header == "100C" || header.StartsWith("100C"))
             {
                 mode = 100;
-                // Parse dataset name (typically positions 7-12 in standard CalculiX format, or trailing chars)
-                currentBlockName = "UNKNOWN";
+                
+                // Default placeholder until the ' -4' line provides the real name
+                currentBlockName = "UNKNOWN"; 
+                
                 if (line.Length >= 11)
                 {
                     currentBlockName = line.Substring(6, Math.Min(6, line.Length - 6)).Trim().ToUpperInvariant();
@@ -465,15 +467,40 @@ public class FrdMesh
                     currentBlockName = line.Substring(4).Trim().ToUpperInvariant();
                 }
                 
-                // Initialize the sub-dictionary under mesh._nodalResults for this block name
                 if (!mesh._nodalResults.ContainsKey(currentBlockName))
                 {
                     mesh._nodalResults[currentBlockName] = new Dictionary<int, float[]>();
                 }
                 
-                Console.WriteLine("mode = 100");
-                Console.WriteLine("currentBlockName = "+currentBlockName);
+                //Console.WriteLine("mode = 100");
+                continue;
+            }
 
+            // Add this block directly after the 100C block to catch ' -4' and rename the dataset to 'DISP'
+            if (header == "-4" || header.StartsWith("-4"))
+            {
+                if (line.Length >= 9)
+                {
+                    string realName = line.Substring(5, 4).Trim().ToUpperInvariant(); // Extracts "DISP"
+                    
+                    if (!string.IsNullOrEmpty(realName) && currentBlockName != realName)
+                    {
+                        // If the old "UNKNOWN" or "L  101" key exists, migrate it to the new name
+                        if (mesh._nodalResults.ContainsKey(currentBlockName))
+                        {
+                            var data = mesh._nodalResults[currentBlockName];
+                            mesh._nodalResults.Remove(currentBlockName);
+                            mesh._nodalResults[realName] = data;
+                        }
+                        else if (!mesh._nodalResults.ContainsKey(realName))
+                        {
+                            mesh._nodalResults[realName] = new Dictionary<int, float[]>();
+                        }
+                        
+                        currentBlockName = realName;
+                        Console.WriteLine("Updated currentBlockName to: " + currentBlockName);
+                    }
+                }
                 continue;
             }
 
@@ -553,7 +580,7 @@ public class FrdMesh
                 // CalculiX uses "-1" or "-2" to signify a data line under block 100
                 if (parts[0] == "-1" || parts[0] == "-2")
                 {
-                    Console.WriteLine("-1 or -2 line");
+                    //Console.WriteLine("-1 or -2 line");
                     // Flush previous node results buffer if one was active
                     if (activeResultNodeId != -1 && accumulatedValues.Count > 0)
                     {
@@ -570,7 +597,7 @@ public class FrdMesh
                         {
                             if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v))
                             {
-                                Console.WriteLine("v = {0}", v);
+                                //Console.WriteLine("v = {0}", v);
                                 accumulatedValues.Add(v);
                             }
                         }
@@ -581,13 +608,13 @@ public class FrdMesh
                     // This is a wrapped continuation line! Append float values to the current active node
                     if (activeResultNodeId != -1)
                     {
-                        Console.WriteLine("activeResultNodeId = {activeResultNodeId}");
+                        //Console.WriteLine("activeResultNodeId = {activeResultNodeId}");
                         float v;
                         for (int i = 0; i < parts.Length; i++)
                         {
                             if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out v))
                             {
-                                Console.WriteLine("v = {0}", v);
+                                //Console.WriteLine("v = {0}", v);
                                 accumulatedValues.Add(v);
                             }
                         }
