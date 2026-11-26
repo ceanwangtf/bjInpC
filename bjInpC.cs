@@ -76,6 +76,7 @@ public class bjFemMesh
     
     // Deduplicated wireframe edges as pairs of node IDs
     public List<Tuple<int, int>> Edges { get; private set;  } 
+    public List<int[]> SurfaceTriangles { get; private set; }
 
     public bjFemMesh()
     {
@@ -83,6 +84,7 @@ public class bjFemMesh
         Elements = new List<bjFemElement>();
         Scale = 1.0;
         Edges = new List<Tuple<int, int>>();
+        SurfaceTriangles = new List<int[]>();        
     }
 
     public static bjFemMesh LoadFromInp(string filePath)
@@ -176,6 +178,7 @@ public class bjFemMesh
         }
 
         mesh.ComputeBoundsAndEdges();
+        mesh.ComputeSurfaceTriangles();
         return mesh;
     }
 
@@ -494,10 +497,10 @@ public class FrdMesh
     {
         if (n.Count == 0) return;
 
-        if (nodes.Count > 0)
+        if (n.Count > 0)
         {
             var el = new bjFemElement { ElementType = elemType.ToString() };
-            el.NodeIds.AddRange(nodes);
+            el.NodeIds.AddRange(n);
             mesh.Elements.Add(el);
         }
 
@@ -715,16 +718,6 @@ public class bjOpenGLViewport : Control
             }
         }
 
-        // 3. Compute CenterX, CenterY, CenterZ, and Scale for camera framing
-        fem.ComputeBoundsAndEdges();
-
-        this.currentMesh = fem;
-        this.Invalidate();
-    }
-
-    private string MapFrdTypeToInpType(int frdType)
-    {
-    
         foreach (var el in frd.Elements)
         {
             int typeCode;
@@ -737,6 +730,18 @@ public class bjOpenGLViewport : Control
             femEl.NodeIds.AddRange(el.NodeIds);
             fem.Elements.Add(femEl);
         }
+
+        // 3. Compute CenterX, CenterY, CenterZ, and Scale for camera framing
+        fem.ComputeBoundsAndEdges();
+        fem.ComputeSurfaceTriangles();
+
+        this.currentMesh = fem;
+        this.Invalidate();
+    }
+
+    private string MapFrdTypeToInpType(int frdType)
+    {
+    
         // Standard CalculiX .frd element type codes
         switch (frdType)
         {
@@ -915,64 +920,64 @@ public class bjOpenGLViewport : Control
                 }
                 glEnd();
             }
-        }
         
-        // Draw Shaded 3D Exterior Faces
-        if (currentMesh.SurfaceTriangles != null && currentMesh.SurfaceTriangles.Count > 0)
-        {
-            glEnable(GL_POLYGON_OFFSET_FILL);
-            glPolygonOffset(1.0f, 1.0f);
-
-            // Compute camera view direction from rotX/rotY for smooth headlight shading
-            double rx = rotX * Math.PI / 180.0;
-            double ry = rotY * Math.PI / 180.0;
-            double lx = Math.Sin(ry) * Math.Cos(rx);
-            double ly = -Math.Sin(rx);
-            double lz = Math.Cos(ry) * Math.Cos(rx);
-
-            glBegin(GL_TRIANGLES);
-            foreach (int[] tri in currentMesh.SurfaceTriangles)
+            // Draw Shaded 3D Exterior Faces
+            if (currentMesh.SurfaceTriangles != null && currentMesh.SurfaceTriangles.Count > 0)
             {
-                bjFemNode n0, n1, n2;
-                if (!currentMesh.Nodes.TryGetValue(tri[0], out n0) ||
-                    !currentMesh.Nodes.TryGetValue(tri[1], out n1) ||
-                    !currentMesh.Nodes.TryGetValue(tri[2], out n2))
-                    continue;
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(1.0f, 1.0f);
 
-                double x0 = (n0.X - currentMesh.CenterX) * currentMesh.Scale;
-                double y0 = (n0.Y - currentMesh.CenterY) * currentMesh.Scale;
-                double z0 = (n0.Z - currentMesh.CenterZ) * currentMesh.Scale;
+                // Compute camera view direction from rotX/rotY for smooth headlight shading
+                double rx = rotX * Math.PI / 180.0;
+                double ry = rotY * Math.PI / 180.0;
+                double lx = Math.Sin(ry) * Math.Cos(rx);
+                double ly = -Math.Sin(rx);
+                double lz = Math.Cos(ry) * Math.Cos(rx);
 
-                double x1 = (n1.X - currentMesh.CenterX) * currentMesh.Scale;
-                double y1 = (n1.Y - currentMesh.CenterY) * currentMesh.Scale;
-                double z1 = (n1.Z - currentMesh.CenterZ) * currentMesh.Scale;
+                glBegin(GL_TRIANGLES);
+                foreach (int[] tri in currentMesh.SurfaceTriangles)
+                {
+                    bjFemNode n0, n1, n2;
+                    if (!currentMesh.Nodes.TryGetValue(tri[0], out n0) ||
+                        !currentMesh.Nodes.TryGetValue(tri[1], out n1) ||
+                        !currentMesh.Nodes.TryGetValue(tri[2], out n2))
+                        continue;
 
-                double x2 = (n2.X - currentMesh.CenterX) * currentMesh.Scale;
-                double y2 = (n2.Y - currentMesh.CenterY) * currentMesh.Scale;
-                double z2 = (n2.Z - currentMesh.CenterZ) * currentMesh.Scale;
+                    double x0 = (n0.X - currentMesh.CenterX) * currentMesh.Scale;
+                    double y0 = (n0.Y - currentMesh.CenterY) * currentMesh.Scale;
+                    double z0 = (n0.Z - currentMesh.CenterZ) * currentMesh.Scale;
 
-                // Cross product for face normal
-                double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
-                double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
-                double nx = uy * vz - uz * vy;
-                double ny = uz * vx - ux * vz;
-                double nz = ux * vy - uy * vx;
-                double len = Math.Sqrt(nx * nx + ny * ny + nz * nz);
-                if (len > 1e-12) { nx /= len; ny /= len; nz /= len; }
+                    double x1 = (n1.X - currentMesh.CenterX) * currentMesh.Scale;
+                    double y1 = (n1.Y - currentMesh.CenterY) * currentMesh.Scale;
+                    double z1 = (n1.Z - currentMesh.CenterZ) * currentMesh.Scale;
 
-                // Headlight diffuse shading (works with zero GL_LIGHTING state setup)
-                double dot = Math.Abs(nx * lx + ny * ly + nz * lz);
-                float shade = (float)(0.30 + 0.70 * dot);
+                    double x2 = (n2.X - currentMesh.CenterX) * currentMesh.Scale;
+                    double y2 = (n2.Y - currentMesh.CenterY) * currentMesh.Scale;
+                    double z2 = (n2.Z - currentMesh.CenterZ) * currentMesh.Scale;
 
-                glColor3f(0.28f * shade, 0.58f * shade, 0.88f * shade);
-                glNormal3d(nx, ny, nz);
-                glVertex3d(x0, y0, z0);
-                glVertex3d(x1, y1, z1);
-                glVertex3d(x2, y2, z2);
+                    // Cross product for face normal
+                    double ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+                    double vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+                    double nx = uy * vz - uz * vy;
+                    double ny = uz * vx - ux * vz;
+                    double nz = ux * vy - uy * vx;
+                    double len = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+                    if (len > 1e-12) { nx /= len; ny /= len; nz /= len; }
+
+                    // Headlight diffuse shading (works with zero GL_LIGHTING state setup)
+                    double dot = Math.Abs(nx * lx + ny * ly + nz * lz);
+                    float shade = (float)(0.30 + 0.70 * dot);
+
+                    glColor3f(0.28f * shade, 0.58f * shade, 0.88f * shade);
+                    glNormal3d(nx, ny, nz);
+                    glVertex3d(x0, y0, z0);
+                    glVertex3d(x1, y1, z1);
+                    glVertex3d(x2, y2, z2);
+                }
+                glEnd();
+
+                glDisable(GL_POLYGON_OFFSET_FILL);
             }
-            glEnd();
-
-            glDisable(GL_POLYGON_OFFSET_FILL);
         }
 
         SwapBuffers(hdc);
