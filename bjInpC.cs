@@ -1229,649 +1229,120 @@ public class bjOpenGLViewport : Control
     
     
 }
+// ====================================================================
+// PLACE THIS AT THE VERY BOTTOM OF YOUR bjInpC.cs FILE
+// ====================================================================
+// ====================================================================
+// PLACE THIS EXCLUSIVELY AT THE VERY BOTTOM OF YOUR bjInpC.cs FILE
+// ====================================================================
 
 public class MainForm : Form
 {
-    private bjOpenGLViewport glViewport;
-    private ToolStripStatusLabel statusLabel;
-    private ToolStrip toolStrip;
-    private string loadedModelName = "Default Stepped L-Bracket";
-    private bool isStlMesh = false;
+    private ToolStrip toolStrip1;
+    private bjOpenGLViewport myViewport;
+    private FrdMesh currentFrdMesh;
 
-    // Camera Euler angles (radians) and zoom
-    //private double rotX = -0.6154797; // -35.264 deg (True Isometric pitch)
-    //private double rotY = -0.7853981; // -45.0 deg (True Isometric yaw)
-    private double zoom = 75.0;
-
-    // Mouse orbit state
-    private bool isDragging = false;
-    private Point lastMousePos;
-    private string activeView = "Iso";
-
-    // 3D Solid Model: L-Bracket with chamfered corner (14 vertices, 9 planar faces)
-    private Vec3[] vertices;
-    private int[][] faces;
-    private Color[] faceBaseColors;
-    
     public MainForm()
     {
-        this.Text = "CalculiX Inp Mesh Viewer V0.2";
-        this.Width = 960;
-        this.Height = 680;
+        // 1. Configure Form layout sizes
+        this.Text = "CalculiX FEM Result Viewer Engine";
+        this.Size = new Size(1024, 768);
 
         //-----------------------------------------------------------------------------------------
-        // MenuStrip
+        //toolStrip1
         //-----------------------------------------------------------------------------------------
-        MenuStrip menuStrip = new MenuStrip();
+        // 2. Instantiate and mount the ToolStrip container structure
+        toolStrip1 = new ToolStrip();
+        toolStrip1.Dock = DockStyle.Top;
+        this.Controls.Add(toolStrip1);
 
-        // File Menu
-        ToolStripMenuItem fileMenu = new ToolStripMenuItem("&File");
-        ToolStripMenuItem openMenuItem = new ToolStripMenuItem("&Import CalculiX Mesh (.inp)...");
-        openMenuItem.ShortcutKeys = Keys.Control | Keys.O;
-        openMenuItem.Click += OpenMenuItem_Click;
+        // 3. Instantiate and mount your custom OpenGL viewport render engine
+        myViewport = new bjOpenGLViewport();
+        myViewport.Dock = DockStyle.Fill;
+        this.Controls.Add(myViewport);
 
-        ToolStripMenuItem exitMenuItem = new ToolStripMenuItem("E&xit");
-        exitMenuItem.Click += (s, e) => this.Close();
+        // ====================================================================
+        // AUTOMATIC TEST RUNNER PIPELINE
+        // ====================================================================
+        string targetFrdFile = "ccxC3D10BoxAnalysisStatic.frd"; // Change this to your target test file name
 
-        fileMenu.DropDownItems.Add(openMenuItem);
-        fileMenu.DropDownItems.Add(new ToolStripSeparator());
-        fileMenu.DropDownItems.Add(exitMenuItem);
-
-        // View Menu
-        ToolStripMenuItem viewMenu = new ToolStripMenuItem("&View");
-        ToolStripMenuItem toggleNodesItem = new ToolStripMenuItem("Show &Nodes");
-        toggleNodesItem.CheckOnClick = true;
-        toggleNodesItem.Checked = true;
-        toggleNodesItem.CheckedChanged += (s, e) =>
+        if (File.Exists(targetFrdFile))
         {
-            glViewport.ShowNodes = toggleNodesItem.Checked;
-            glViewport.Invalidate();
-        };
-        viewMenu.DropDownItems.Add(toggleNodesItem);
-
-        menuStrip.Items.Add(fileMenu);
-        menuStrip.Items.Add(viewMenu);
-        this.MainMenuStrip = menuStrip;
-        //-----------------------------------------------------------------------------------------
-        //toolStrip
-        //-----------------------------------------------------------------------------------------
-        toolStrip = new ToolStrip();
-        toolStrip.ImageScalingSize = new Size(24, 24);
-
-        // Import STL button
-        ToolStripButton btnOpen = new ToolStripButton("Import STL", CreateFolderIcon());
-        btnOpen.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
-        btnOpen.TextImageRelation = TextImageRelation.ImageAboveText;
-        btnOpen.Click += BtnOpenStl_Click;
-        toolStrip.Items.Add(btnOpen);
-
-        // Import Frd button
-        ToolStripButton btnFrd = new ToolStripButton("Import Frd", CreateFrdFolderIcon());
-        btnFrd.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
-        btnFrd.TextImageRelation = TextImageRelation.ImageAboveText;
-        btnFrd.Click += BtnOpenFrd_Click;
-        toolStrip.Items.Add(btnFrd);
-
-        toolStrip.Items.Add(new ToolStripSeparator());
-
-        string[] views = { "Front", "Back", "Top", "Bottom", "Left", "Right", "Iso" };
-
-        foreach (string view in views)
-        {
-            if (view == "Iso")
+            try
             {
-                toolStrip.Items.Add(new ToolStripSeparator());
+                // A. Run file reader matrix loop processing arrays
+                this.currentFrdMesh = FrdMesh.Load(targetFrdFile);
+
+                // B. Map geometry and node coordinates to OpenGL context properties
+                this.myViewport.SetFrdMesh(this.currentFrdMesh);
+
+                // C. Reconstruct tool bar button toggles dynamically
+                this.BuildDynamicToolStripUI(this.currentFrdMesh);
             }
-
-            ToolStripButton btn = new ToolStripButton(view, CreateViewIcon(view));
-            btn.DisplayStyle = ToolStripItemDisplayStyle.ImageAndText;
-            btn.TextImageRelation = TextImageRelation.ImageAboveText;
-            btn.Tag = view;
-            string currentView = view;
-            btn.Click += (sender, e) => SetStandardView(currentView);
-            toolStrip.Items.Add(btn);
+            catch (Exception ex)
+            {
+                MessageBox.Show("Pipeline execution pass failed: " + ex.Message);
+            }
         }
-
-        toolStrip.Items.Add(new ToolStripSeparator());
-
-        ToolStripButton btnExit = new ToolStripButton("Exit");
-        btnExit.Click += (sender, e) => this.Close();
-        toolStrip.Items.Add(btnExit);
-        //-----------------------------------------------------------------------------------------
-        // Status Bar
-        //-----------------------------------------------------------------------------------------
-        StatusStrip statusStrip = new StatusStrip();
-        statusLabel = new ToolStripStatusLabel("File -> Import CalculiX Mesh (.inp)... | Left-Drag: Orbit | Scroll: Zoom");
-        statusStrip.Items.Add(statusLabel);
-        //-----------------------------------------------------------------------------------------
-        // OpenGL Viewport (ONLY instantiate once!)
-        //-----------------------------------------------------------------------------------------
-        glViewport = new bjOpenGLViewport
-        {
-            Dock = DockStyle.Fill,
-            ShowNodes = true
-        };
-
-        //-----------------------------------------------------------------------------------------
-        this.Controls.Add(glViewport);
-        this.Controls.Add(statusStrip);
-        this.Controls.Add(toolStrip);
-        this.Controls.Add(menuStrip);
     }
+
     private void BuildDynamicToolStripUI(FrdMesh loadedMesh)
     {
-        // 1. Clear out old dynamic result buttons (preserves standard file open buttons)
-        // Assumes your ToolStrip control name is 'toolStrip1'
-        for (int i = toolStrip.Items.Count - 1; i >= 0; i--)
+        if (loadedMesh == null || loadedMesh.NodalResults == null) return;
+
+        // Clean out historical items from the toolbar strip row mapping
+        for (int i = toolStrip1.Items.Count - 1; i >= 0; i--)
         {
-            // Adjust this if you want to keep permanent buttons like "Open File"
-            if (toolStrip.Items[i].Tag is string)
+            if (toolStrip1.Items[i].Tag is string)
             {
-                toolStrip.Items.RemoveAt(i);
+                toolStrip1.Items.RemoveAt(i);
             }
         }
 
-        // 2. Loop through every discovered result key block (e.g., DISP, STRESS, TEMP)
+        // Loop through the result block keys (e.g. DISP, STRESS) and generate buttons
         foreach (string blockName in loadedMesh.NodalResults.Keys)
         {
-            // 3. Create a lightweight ToolStripButton
             ToolStripButton blockButton = new ToolStripButton();
-            blockButton.Text = blockName;          // Display name (e.g., "DISP")
-            blockButton.Tag = blockName;           // Map data key identifier
+            blockButton.Text = blockName;
+            blockButton.Tag = blockName; // Keep track of block token
             blockButton.DisplayStyle = ToolStripItemDisplayStyle.Text;
-            
-            // 4. Attach the common viewport switching click handler
-            blockButton.Click += DynamicBlockButton_Click;
+            blockButton.Click += new EventHandler(DynamicBlockButton_Click);
 
-            // 5. Add the item to your toolbar layout line
-            toolStrip.Items.Add(blockButton);
+            toolStrip1.Items.Add(blockButton);
         }
     }
 
     private void DynamicBlockButton_Click(object sender, EventArgs e)
     {
         ToolStripButton clickedButton = sender as ToolStripButton;
-        string targetBlockName = clickedButton?.Tag as string;
+        if (clickedButton == null) return;
 
-        // Assumes your global active mesh reference is named 'currentFrdMesh' 
-        // and your rendering panel control is 'myViewport'
-        if (targetBlockName != null && currentFrdMesh != null)
+        string targetBlockName = clickedButton.Tag as string;
+        if (targetBlockName == null || currentFrdMesh == null || currentFrdMesh.NodalResults == null) return;
+
+        // Explicit lookup pattern safely compatible with older syntax standards
+        if (currentFrdMesh.NodalResults.ContainsKey(targetBlockName))
         {
-            if (currentFrdMesh.NodalResults.TryGetValue(targetBlockName, out var dataset))
-            {
-                // Bind the active data table array map directly to your renderer properties
-                myViewport.NodeDisplacements = dataset;
-                
-                // Turn on structural warping calculations exclusively if reading "DISP" vectors
-                myViewport.ShowDeformed = (targetBlockName == "DISP");
-                
-                // Set default visibility triggers
-                myViewport.ShowNodes = true; 
-
-                // Force OpenGL viewport context canvas redraw
-                myViewport.Invalidate();
-            }
-        }
-    }
-
-    private void BuildDynamicUI(FrdMesh loadedMesh)
-    {
-        //test
-        // Clear out old dynamic buttons if a file was previously loaded
-        this.ResultPanel.Controls.Clear(); 
-
-        int verticalOffset = 10;
-
-        foreach (string blockName in loadedMesh.GetDiscoveredResultBlocks())
-        {
-            // 1. Create a button dynamically for each data type found (e.g., DISP, STRESS, TEMP)
-            Button resultButton = new Button();
-            resultButton.Text = "View {blockName}";
-            resultButton.Tag = blockName; // Keep track of the block identifier
-            resultButton.Location = new Point(10, verticalOffset);
-            resultButton.Size = new Size(120, 30);
-
-            // 2. Attach a shared event click handler
-            resultButton.Click += DynamicResultButton_Click;
-
-            // 3. Add the new button to your dashboard configuration panel
-            this.ResultPanel.Controls.Add(resultButton);
-
-            // Advance layout position for the next dynamic element
-            verticalOffset += 40; 
-        }
-    }
-
-    private void DynamicResultButton_Click(object sender, EventArgs e)
-    {
-        Button clickedButton = sender as Button;
-        string targetBlock = clickedButton?.Tag as string;
-
-        if (targetBlock != null && currentFrdMesh.NodalResults.TryGetValue(targetBlock, out var dataset))
-        {
-            // Bind the data field dynamically to your rendering control 
-            myViewport.NodeDisplacements = dataset;
-            myViewport.ShowDeformed = (targetBlock == "DISP"); 
+            Dictionary<int, float[]> dataset = currentFrdMesh.NodalResults[targetBlockName];
             
-            myViewport.Invalidate(); // Refresh the OpenGL view canvas
-        }
-    }
-    
-    private void ResultComboBox_SelectedIndexChanged(object sender, EventArgs e)
-    {
-        string selectedBlock = ResultComboBox.SelectedItem?.ToString();
-        if (string.IsNullOrEmpty(selectedBlock) || currentFrdMesh == null) return;
+            // Assign active data vectors over to viewport canvas properties
+            myViewport.NodeDisplacements = dataset;
+            myViewport.ShowDeformed = (targetBlockName == "DISP");
+            myViewport.ShowNodes = true;
 
-        // Get all results associated with the selected block type
-        if (currentFrdMesh.NodalResults.TryGetValue(selectedBlock, out var dataset))
-        {
-            // Update your viewport configuration dynamically
-            if (selectedBlock == "DISP")
-            {
-                myViewport.NodeDisplacements = dataset;
-                myViewport.ShowDeformed = true;
-            }
-            else
-            {
-                // For other scalar/tensor data fields (like STRESS), map to color engine only
-                myViewport.ShowDeformed = false; 
-                // Feed the dataset to a general scalar engine property in your viewport
-                // myViewport.CurrentScalarField = dataset; 
-            }
-
-            // Force the OpenGL control to clear and redraw with the new visualization parameters
-            myViewport.Invalidate(); 
-        }
-    }
-    
-    private void OnFileLoaded(string filePath)
-    {
-        // 1. Load and parse the FRD file
-        FrdMesh mesh = FrdMesh.Load(filePath);
-        
-        // 2. Clear out any old dynamic UI elements
-        ResultComboBox.Items.Clear();
-        
-        // 3. Dynamically populate the ComboBox depending on what was found inside the file
-        foreach (string blockName in mesh.GetAvailableResultBlocks())
-        {
-            // Adds "DISP", "STRESS", "TEMP", etc., automatically based on file contents
-            ResultComboBox.Items.Add(blockName); 
-        }
-        
-        // 4. Select the first available item if any exist
-        if (ResultComboBox.Items.Count > 0)
-        {
-            ResultComboBox.SelectedIndex = 0;
-        }
-        else
-        {
-            MessageBox.Show("This FRD file contains a mesh but no nodal analysis results.");
+            // Trigger complete viewport context redraw paint executions
+            myViewport.Invalidate();
         }
     }
 
-    private void BtnOpenStl_Click(object sender, EventArgs e)
-    {
-        using (OpenFileDialog ofd = new OpenFileDialog())
-        {
-            ofd.Title = "Import 3D STL Model";
-            ofd.Filter = "STL Files (*.stl)|*.stl|All Files (*.*)|*.*";
-
-            if (ofd.ShowDialog() == DialogResult.OK)
-            {
-                try
-                {
-                    LoadStlFile(ofd.FileName);
-                    loadedModelName = Path.GetFileName(ofd.FileName);
-                    isStlMesh = true;
-                    SetStandardView("Iso");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Failed to load STL file:" + ex.Message, "STL Import Error",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
-    }
-    
-    private void BtnOpenFrd_Click(object sender, EventArgs e)
-    {
-        using (OpenFileDialog ofd = new OpenFileDialog())
-        {
-            ofd.Title = "Import Frd result";
-            ofd.Filter = "Frd Files (*.frd)|*.frd|All Files (*.*)|*.*";
-
-            if (ofd.ShowDialog() == DialogResult.OK)
-            {
-                try
-                {
-                    //LoadStlFile(ofd.FileName);
-                    //loadedModelName = Path.GetFileName(ofd.FileName);
-                    //isStlMesh = true;
-                    
-                    //var mesh = FrdMesh.Load(path);
-                    //var viewport = new OpenGLViewport(mesh) { Dock = DockStyle.Fill };
-                    
-                    var mesh = FrdMesh.Load(ofd.FileName);
-                    
-                    glViewport.SetFrdMesh(mesh);
-
-                    SetStandardView("Iso");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Failed to load Frd file:" + ex.Message, "Frd Import Error",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
-    }
-
-    private void LoadStlFile(string filePath)
-    {
-        byte[] fileBytes = File.ReadAllBytes(filePath);
-        if (fileBytes.Length < 84)
-            throw new InvalidDataException("File is too small to be a valid STL.");
-
-        List<Vec3> loadedVerts = new List<Vec3>();
-        List<int[]> loadedFaces = new List<int[]>();
-
-        // Detect Binary vs ASCII STL:
-        // Binary STL has 80-byte header + 4-byte uint32 triangle count + 50 bytes per triangle
-        uint triCount = BitConverter.ToUInt32(fileBytes, 80);
-        long expectedBinarySize = 84L + (long)triCount * 50L;
-
-        if (expectedBinarySize == fileBytes.Length && triCount > 0)
-        {
-            // Parse Binary STL
-            using (MemoryStream ms = new MemoryStream(fileBytes))
-            using (BinaryReader br = new BinaryReader(ms))
-            {
-                br.ReadBytes(80); // skip header
-                uint count = br.ReadUInt32();
-
-                for (uint i = 0; i < count; i++)
-                {
-                    // Skip facet normal (3 floats), we compute normals from winding
-                    br.ReadSingle(); br.ReadSingle(); br.ReadSingle();
-
-                    int baseIdx = loadedVerts.Count;
-                    for (int v = 0; v < 3; v++)
-                    {
-                        float x = br.ReadSingle();
-                        float y = br.ReadSingle();
-                        float z = br.ReadSingle();
-                        // Map CAD Z-up to Viewer Y-up (X -> X, Z -> Y, -Y -> Z)
-                        loadedVerts.Add(new Vec3(x, z, -y));
-                    }
-                    br.ReadUInt16(); // attribute byte count
-
-                    loadedFaces.Add(new int[] { baseIdx, baseIdx + 1, baseIdx + 2 });
-                }
-            }
-        }
-        else
-        {
-            // Parse ASCII STL
-            string text = Encoding.ASCII.GetString(fileBytes);
-            //string[] lines = text.Split(new[] { '                ', '                ' }, StringSplitOptions.RemoveEmptyEntries);
-            string[] lines = text.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-            List<Vec3> triVerts = new List<Vec3>(3);
-
-            foreach (string rawLine in lines)
-            {
-                string line = rawLine.Trim();
-                if (line.StartsWith("vertex ", StringComparison.OrdinalIgnoreCase))
-                {
-                    string[] parts = line.Split(new[] { ' ', '	' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length >= 4)
-                    {
-                        double x = double.Parse(parts[1], CultureInfo.InvariantCulture);
-                        double y = double.Parse(parts[2], CultureInfo.InvariantCulture);
-                        double z = double.Parse(parts[3], CultureInfo.InvariantCulture);
-                        // Map CAD Z-up to Viewer Y-up
-                        triVerts.Add(new Vec3(x, z, -y));
-
-                        if (triVerts.Count == 3)
-                        {
-                            int baseIdx = loadedVerts.Count;
-                            loadedVerts.Add(triVerts[0]);
-                            loadedVerts.Add(triVerts[1]);
-                            loadedVerts.Add(triVerts[2]);
-                            loadedFaces.Add(new int[] { baseIdx, baseIdx + 1, baseIdx + 2 });
-                            triVerts.Clear();
-                        }
-                    }
-                }
-            }
-        }
-
-        if (loadedFaces.Count == 0)
-            throw new InvalidDataException("No triangles found in STL file.");
-
-        // Normalize model: center at origin (0,0,0) and scale to fit unit radius ~1.8
-        Vec3 min = loadedVerts[0];
-        Vec3 max = loadedVerts[0];
-        for (int i = 1; i < loadedVerts.Count; i++)
-        {
-            Vec3 p = loadedVerts[i];
-            if (p.X < min.X) min.X = p.X;
-            if (p.Y < min.Y) min.Y = p.Y;
-            if (p.Z < min.Z) min.Z = p.Z;
-            if (p.X > max.X) max.X = p.X;
-            if (p.Y > max.Y) max.Y = p.Y;
-            if (p.Z > max.Z) max.Z = p.Z;
-        }
-
-        Vec3 center = new Vec3((min.X + max.X) * 0.5, (min.Y + max.Y) * 0.5, (min.Z + max.Z) * 0.5);
-        double maxExtent = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z));
-        double scale = maxExtent > 1e-9 ? (3.2 / maxExtent) : 1.0;
-
-        vertices = new Vec3[loadedVerts.Count];
-        for (int i = 0; i < loadedVerts.Count; i++)
-        {
-            vertices[i] = (loadedVerts[i] - center) * scale;
-        }
-
-        faces = loadedFaces.ToArray();
-        faceBaseColors = new Color[faces.Length];
-        Color stlSurfaceColor = Color.FromArgb(95, 175, 245);
-        for (int i = 0; i < faces.Length; i++)
-        {
-            faceBaseColors[i] = stlSurfaceColor;
-        }
-
-        zoom = 95.0;
-    }
-    
-    private Bitmap CreateFolderIcon()
-    {
-        Bitmap bmp = new Bitmap(24, 24);
-        using (Graphics g = Graphics.FromImage(bmp))
-        {
-            //g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-
-            PointF[] backTab = { new PointF(2, 6), new PointF(9, 6), new PointF(11, 8), new PointF(21, 8), new PointF(21, 19), new PointF(2, 19) };
-            PointF[] frontFlap = { new PointF(2, 10), new PointF(22, 10), new PointF(20, 19), new PointF(2, 19) };
-
-            using (Brush backBrush = new SolidBrush(Color.FromArgb(215, 165, 45)))
-            using (Brush frontBrush = new SolidBrush(Color.FromArgb(245, 200, 75)))
-            using (Pen borderPen = new Pen(Color.FromArgb(90, 70, 20), 1.2f))
-            {
-                g.FillPolygon(backBrush, backTab);
-                g.DrawPolygon(borderPen, backTab);
-                g.FillPolygon(frontBrush, frontFlap);
-                g.DrawPolygon(borderPen, frontFlap);
-            }
-        }
-        return bmp;
-    }
-
-    private Bitmap CreateFrdFolderIcon()
-    {
-        Bitmap bmp = new Bitmap(24, 24);
-        using (Graphics g = Graphics.FromImage(bmp))
-        {
-            //g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-
-            PointF[] backTab = { new PointF(2, 6), new PointF(9, 6), new PointF(11, 8), new PointF(21, 8), new PointF(21, 19), new PointF(2, 19) };
-            PointF[] frontFlap = { new PointF(2, 10), new PointF(22, 10), new PointF(20, 19), new PointF(2, 19) };
-
-            using (Brush backBrush = new SolidBrush(Color.FromArgb(215, 165, 45)))
-            using (Brush frontBrush = new SolidBrush(Color.FromArgb(245, 200, 75)))
-            using (Pen borderPen = new Pen(Color.FromArgb(90, 70, 20), 1.2f))
-            {
-                g.FillPolygon(backBrush, backTab);
-                g.DrawPolygon(borderPen, backTab);
-                g.FillPolygon(frontBrush, frontFlap);
-                g.DrawPolygon(borderPen, frontFlap);
-            }
-        }
-        return bmp;
-    }
-    
-    private Bitmap CreateViewIcon(string view)
-    {
-        Bitmap bmp = new Bitmap(24, 24);
-        using (Graphics g = Graphics.FromImage(bmp))
-        {
-            //g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.Clear(Color.Transparent);
-
-            PointF top = new PointF(12, 2);
-            PointF topLeft = new PointF(3, 7);
-            PointF topRight = new PointF(21, 7);
-            PointF center = new PointF(12, 12);
-            PointF botLeft = new PointF(3, 17);
-            PointF botRight = new PointF(21, 17);
-            PointF bottom = new PointF(12, 22);
-
-            PointF[] topFace = { top, topRight, center, topLeft };
-            PointF[] leftFace = { topLeft, center, bottom, botLeft };
-            PointF[] rightFace = { center, topRight, botRight, bottom };
-
-            Brush baseBrush = new SolidBrush(Color.FromArgb(235, 240, 245));
-            Brush highlightBrush = new SolidBrush(Color.FromArgb(0, 120, 215));
-            Pen visiblePen = new Pen(Color.FromArgb(50, 50, 50), 1.3f);
-            Pen hiddenPen = new Pen(Color.FromArgb(0, 120, 215), 1.6f);
-            //hiddenPen.DashStyle = DashStyle.Dash;
-
-            g.FillPolygon(baseBrush, topFace);
-            g.FillPolygon(baseBrush, leftFace);
-            g.FillPolygon(baseBrush, rightFace);
-
-            if (view == "Iso")
-            {
-                using (Brush isoTop = new SolidBrush(Color.FromArgb(100, 180, 245)))
-                using (Brush isoLeft = new SolidBrush(Color.FromArgb(0, 120, 215)))
-                using (Brush isoRight = new SolidBrush(Color.FromArgb(0, 85, 160)))
-                {
-                    g.FillPolygon(isoTop, topFace);
-                    g.FillPolygon(isoLeft, leftFace);
-                    g.FillPolygon(isoRight, rightFace);
-                }
-            }
-            else if (view == "Top") g.FillPolygon(highlightBrush, topFace);
-            else if (view == "Front") g.FillPolygon(highlightBrush, leftFace);
-            else if (view == "Right") g.FillPolygon(highlightBrush, rightFace);
-
-            g.DrawPolygon(visiblePen, topFace);
-            g.DrawPolygon(visiblePen, leftFace);
-            g.DrawPolygon(visiblePen, rightFace);
-
-            if (view == "Bottom")
-            {
-                PointF[] bottomFace = { botLeft, bottom, botRight, center };
-                g.DrawPolygon(hiddenPen, bottomFace);
-            }
-            else if (view == "Back")
-            {
-                PointF[] backRightFace = { top, topRight, botRight, center };
-                g.DrawPolygon(hiddenPen, backRightFace);
-            }
-            else if (view == "Left")
-            {
-                PointF[] backLeftFace = { top, center, bottom, botLeft };
-                g.DrawPolygon(hiddenPen, backLeftFace);
-            }
-        }
-        return bmp;
-    }
-
-        
-    private void OpenMenuItem_Click(object sender, EventArgs e)
-    {
-        using (OpenFileDialog dlg = new OpenFileDialog())
-        {
-            dlg.Title = "Import CalculiX Input File";
-            dlg.Filter = "CalculiX / Abaqus Input (*.inp)|*.inp|All files (*.*)|*.*";
-
-            if (dlg.ShowDialog() == DialogResult.OK)
-            {
-                try
-                {
-                    bjFemMesh mesh = bjFemMesh.LoadFromInp(dlg.FileName);
-                    Console.WriteLine("Nodes  : {0}", mesh.Nodes.Count);
-                    Console.WriteLine("Elems  : {0}", mesh.Elements.Count);
-                    Console.WriteLine("Edges  : {0}", mesh.Edges.Count);
-                    Console.WriteLine("Center : ({0}, {1}, {2})", mesh.CenterX, mesh.CenterY, mesh.CenterZ);
-                    Console.WriteLine("Scale  : {0}", mesh.Scale);
-                    
-                    glViewport.SetMesh(mesh);
-                    statusLabel.Text = string.Format("Loaded: {0} | Nodes: {1} | Elements: {2} | Edges: {3}",
-                        Path.GetFileName(dlg.FileName), mesh.Nodes.Count, mesh.Elements.Count, mesh.Edges.Count);
-                    
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Failed to load .inp file:\n" + ex.Message,
-                        "Import Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            }
-        }
-    }
-    
-    private void SetStandardView(string view)
-    {
-        activeView = view;
-        switch (view)
-        {
-            case "Front":  glViewport.SetView(0.0,0.0); break;
-            case "Back":   glViewport.SetView(0.0,Math.PI); break;
-            case "Right":  glViewport.SetView(0.0,-Math.PI/2.0); break;
-            case "Left":   glViewport.SetView(0.0,Math.PI/2.0); break;
-            case "Top":    glViewport.SetView(Math.PI/2.0,0.0); break;
-            case "Bottom": glViewport.SetView(-Math.PI,0.0); break;
-            case "Iso":    glViewport.SetView(0.6154797,-Math.PI/4.0); break;
-        }
-        UpdateToolbarSelection();
-        //viewportPanel.Invalidate();
-        Invalidate();
-    }
-    
-    
-    private void UpdateToolbarSelection()
-    {
-        foreach (ToolStripItem item in toolStrip.Items)
-        {
-            ToolStripButton btn = item as ToolStripButton;
-            if (btn != null && btn.Tag != null)
-            {
-                btn.Checked = (btn.Tag.ToString() == activeView);
-            }
-        }
-    }
-
-
+    // ====================================================================
+    // RUNNER ENTRY POINT
+    // ====================================================================
     [STAThread]
-    static void Main()
+    public static void Main()
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new MainForm());
     }
 }
-
