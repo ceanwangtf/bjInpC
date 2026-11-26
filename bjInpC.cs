@@ -672,6 +672,10 @@ public class bjOpenGLViewport : Control
     private double zoomDistance = 3.5;
     private Point lastMousePos;
     private bool isDragging = false;
+    // Add these lines inside your bjOpenGLViewport class
+    public Dictionary<int, float[]> NodeDisplacements { get; set; }
+    public float DisplacementScaleFactor { get; set; }
+    public bool ShowDeformed { get; set; }
 
     public bool ShowNodes { get; set; } 
     
@@ -707,6 +711,10 @@ public class bjOpenGLViewport : Control
     public bjOpenGLViewport()
     {
         this.SetStyle(ControlStyles.Opaque | ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint, true);
+        // Add your legacy-compatible property initializations here:
+        this.DisplacementScaleFactor = 1.0f;
+        this.ShowDeformed = false;
+        this.NodeDisplacements = new Dictionary<int, float[]>();
     }
 
     public void SetView(double newRotX, double newRotY)
@@ -1064,7 +1072,8 @@ public class bjOpenGLViewport : Control
     }
     private double GetNodeMagnitude(int nodeId)
     {
-        if (NodeDisplacements != null && NodeDisplacements.TryGetValue(nodeId, out float[] vec) && vec.Length >= 3)
+        float[] vec; // Declared explicitly for backwards compatibility 
+        if (NodeDisplacements != null && NodeDisplacements.TryGetValue(nodeId, out vec) && vec.Length >= 3)
         {
             return Math.Sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
         }
