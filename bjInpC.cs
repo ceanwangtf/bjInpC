@@ -397,7 +397,17 @@ public class FrdMesh
     public List<int[]> Edges = new List<int[]>();
     public float[] Center = new float[3];
     public float Radius = 1.0f;
+    // 1. Declare the private backing field and initialize it directly
+    private Dictionary<string, Dictionary<int, float[]>> _nodalResults = new Dictionary<string, Dictionary<int, float[]>>();
 
+    // 2. Expose it via a public read-only property
+    public Dictionary<string, Dictionary<int, float[]>> NodalResults
+    {
+        get { return _nodalResults; }
+    }
+    
+    
+    
     public static FrdMesh Load(string path)
     {
         var mesh = new FrdMesh();
@@ -664,6 +674,35 @@ public class bjOpenGLViewport : Control
     private bool isDragging = false;
 
     public bool ShowNodes { get; set; } 
+    
+    private void ApplyColorMap(double value)
+    {
+        // Clamp the incoming value strictly between 0 and 1
+        double v = Math.Max(0.0, Math.Min(1.0, value));
+        
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+
+        // Jet / Rainbow color ramp mapping logic
+        if (v < 0.25) {
+            r = 0.0f;
+            g = (float)(4.0 * v);
+            b = 1.0f;
+        } else if (v < 0.5) {
+            r = 0.0f;
+            g = 1.0f;
+            b = (float)(1.0 - 4.0 * (v - 0.25));
+        } else if (v < 0.75) {
+            r = (float)(4.0 * (v - 0.5));
+            g = 1.0f;
+            b = 0.0f;
+        } else {
+            r = 1.0f;
+            g = (float)(1.0 - 4.0 * (v - 0.75));
+            b = 0.0f;
+        }
+
+        glColor3f(r, g, b);
+    }
 
     public bjOpenGLViewport()
     {
@@ -841,7 +880,34 @@ public class bjOpenGLViewport : Control
         Invalidate();
     }
     
-    
+    // Local state variables to track within the viewport class or method
+    private double minResultVal = 0.0;
+    private double maxResultVal = 1.0;
+
+    private void ComputeResultBounds()
+    {
+        if (NodeDisplacements == null || NodeDisplacements.Count == 0) return;
+
+        double minVal = double.MaxValue;
+        double maxVal = double.MinValue;
+
+        foreach (var kvp in NodeDisplacements)
+        {
+            float[] vec = kvp.Value;
+            if (vec == null || vec.Length < 3) continue;
+
+            // Calculate 3D magnitude (hypotenuse)
+            double mag = Math.Sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
+
+            if (mag < minVal) minVal = mag;
+            if (mag > maxVal) maxVal = mag;
+        }
+
+        // Prevent divide-by-zero on uniform results distributions
+        minResultVal = minVal;
+        maxResultVal = (maxVal - minVal > 1e-9) ? maxVal : minVal + 1.0;
+    }
+
 
     protected override void OnPaint(PaintEventArgs e)
     {
@@ -968,11 +1034,25 @@ public class bjOpenGLViewport : Control
                     double dot = Math.Abs(nx * lx + ny * ly + nz * lz);
                     float shade = (float)(0.30 + 0.70 * dot);
 
-                    glColor3f(0.28f * shade, 0.58f * shade, 0.88f * shade);
-                    glNormal3d(nx, ny, nz);
+                    //glColor3f(0.28f * shade, 0.58f * shade, 0.88f * shade);
+                    //glNormal3d(nx, ny, nz);
+                    //glVertex3d(x0, y0, z0);
+                    //glVertex3d(x1, y1, z1);
+                    //glVertex3d(x2, y2, z2);
+                    // Vertex 0 Color and Position
+                    double mag0 = GetNodeMagnitude(n0.Id);
+                    ApplyColorMap((mag0 - minResultVal) / (maxResultVal - minResultVal));
                     glVertex3d(x0, y0, z0);
+
+                    // Vertex 1 Color and Position
+                    double mag1 = GetNodeMagnitude(n1.Id);
+                    ApplyColorMap((mag1 - minResultVal) / (maxResultVal - minResultVal));
                     glVertex3d(x1, y1, z1);
-                    glVertex3d(x2, y2, z2);
+
+                    // Vertex 2 Color and Position
+                    double mag2 = GetNodeMagnitude(n2.Id);
+                    ApplyColorMap((mag2 - minResultVal) / (maxResultVal - minResultVal));
+                    glVertex3d(x2, y2, z2);                    
                 }
                 glEnd();
 
@@ -981,6 +1061,14 @@ public class bjOpenGLViewport : Control
         }
 
         SwapBuffers(hdc);
+    }
+    private double GetNodeMagnitude(int nodeId)
+    {
+        if (NodeDisplacements != null && NodeDisplacements.TryGetValue(nodeId, out float[] vec) && vec.Length >= 3)
+        {
+            return Math.Sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
+        }
+        return 0.0;
     }
 
     private void DrawCoordinateAxes()
