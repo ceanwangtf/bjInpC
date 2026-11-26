@@ -672,7 +672,10 @@ public class FrdMesh
 
 public class bjOpenGLViewport : Control
 {
+
+
     // Native Windows OpenGL P/Invoke declarations (zero external DLL dependencies)
+
     [DllImport("user32.dll")]
     private static extern IntPtr GetDC(IntPtr hWnd);
 
@@ -687,6 +690,22 @@ public class bjOpenGLViewport : Control
 
     [DllImport("gdi32.dll")]
     private static extern bool SwapBuffers(IntPtr hdc);
+
+
+    [DllImport("opengl32.dll")]
+    private static extern void glPushMatrix();
+
+    [DllImport("opengl32.dll")]
+    private static extern void glPopMatrix();
+
+    [DllImport("opengl32.dll")]
+    private static extern void glOrtho(double left, double right, double bottom, double top, double zNear, double zFar);
+
+    [DllImport("opengl32.dll")]
+    private static extern void glVertex3f(float x, float y, float z);
+
+    [DllImport("opengl32.dll")]
+    private static extern void glVertex2i(int x, int y);
 
     [DllImport("opengl32.dll")]
     private static extern IntPtr wglCreateContext(IntPtr hdc);
@@ -784,6 +803,10 @@ public class bjOpenGLViewport : Control
         public uint dwVisibleMask;
         public uint dwDamageMask;
     }
+    //colorbar
+    private float currentMinVal = 0.0f;
+    private float currentMaxVal = 0.0f;
+    private bool showColorbar = true;
 
     private const uint PFD_DRAW_TO_WINDOW = 0x00000004;
     private const uint PFD_SUPPORT_OPENGL = 0x00000020;
@@ -1085,8 +1108,11 @@ public class bjOpenGLViewport : Control
         int h = Math.Max(1, this.ClientSize.Height);
         glViewport(0, 0, w, h);
 
+
         glClearColor(0.11f, 0.13f, 0.16f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
 
         // Set up perspective projection
         glMatrixMode(GL_PROJECTION);
@@ -1105,6 +1131,9 @@ public class bjOpenGLViewport : Control
         glTranslated(0.0, 0.0, -zoomDistance);
         glRotated(rotX, 1.0, 0.0, 0.0);
         glRotated(rotY, 0.0, 1.0, 0.0);
+
+        // Draw the fixed 2D colorbar overlay right over top of the 3D environment
+        DrawColorbar(Width, Height);
 
         DrawCoordinateAxes();
 
@@ -1225,6 +1254,67 @@ public class bjOpenGLViewport : Control
 
         SwapBuffers(hdc);
     }
+    
+    private void GetRainbowColor(float value, out float r, out float g, out float b)
+    {
+        value = Math.Max(0.0f, Math.Min(1.0f, value)); // Clamp input
+        r = Math.Max(0.0f, Math.Min(1.0f, 4.0f * value - 2.0f));
+        g = Math.Max(0.0f, Math.Min(1.0f, 2.0f - Math.Abs(4.0f * value - 2.0f)));
+        b = Math.Max(0.0f, Math.Min(1.0f, 2.0f - 4.0f * value));
+    }
+    
+    private void DrawColorbar(int width, int height)
+    {
+        // Disable depth testing (0x0B71) so it paints over the 3D model
+        glDisable(0x0B71);
+
+        // 1. Convert screen pixels to normalized OpenGL coordinate space (-1.0 to 1.0)
+        // Avoids using glOrtho completely!
+        float barWidthNorm = 20.0f / (width / 2.0f);
+        float barHeightNorm = (height * 0.5f) / (height / 2.0f);
+        
+        // Position on right side with a 40px offset
+        float startXNorm = (width - 20.0f - 40.0f) / (width / 2.0f) - 1.0f;
+        float startYNorm = - (height * 0.5f / 2.0f) / (height / 2.0f);
+
+        // 2. Render continuous vertical color strips using 3D commands
+        // 0x0008 is GL_QUAD_STRIP
+        glBegin(0x0008); 
+        
+        float r, g, b;
+        int segments = 32;
+        for (int i = 0; i <= segments; i++)
+        {
+            float t = (float)i / segments;
+            GetRainbowColor(t, out r, out g, out b);
+
+            float currentY = startYNorm + (t * barHeightNorm);
+
+            glColor3f(r, g, b);
+            
+            // Use the exact vertex variant available in your file
+            // Try glVertex3f first. If it errors, change it to glVertex3d
+            glVertex3f(startXNorm, currentY, 0.0f);
+            glVertex3f(startXNorm + barWidthNorm, currentY, 0.0f);
+        }
+        glEnd();
+
+        // 3. Draw a crisp boundary border ring around the bar
+        glColor3f(0.0f, 0.0f, 0.0f);
+        glLineWidth(1.0f);
+        
+        // 0x0002 is GL_LINE_LOOP
+        glBegin(0x0002); 
+        glVertex3f(startXNorm, startYNorm, 0.0f);
+        glVertex3f(startXNorm + barWidthNorm, startYNorm, 0.0f);
+        glVertex3f(startXNorm + barWidthNorm, startYNorm + barHeightNorm, 0.0f);
+        glVertex3f(startXNorm, startYNorm + barHeightNorm, 0.0f);
+        glEnd();
+
+        // 4. Re-enable depth testing
+        glEnable(0x0B71); 
+    }
+        
     private double GetNodeMagnitude(int nodeId)
     {
         float[] vec; // Declared explicitly for backwards compatibility 
@@ -1386,7 +1476,7 @@ public class MainForm : Form
         glViewport = new bjOpenGLViewport
         {
             Dock = DockStyle.Fill,
-            ShowNodes = true
+            ShowNodes = false
         };
 
         //-----------------------------------------------------------------------------------------
@@ -1425,6 +1515,7 @@ public class MainForm : Form
             toolStrip1.Items.Add(blockButton);
         }
     }
+    
     private void DynamicBlockButton_Click(object sender, EventArgs e)
     {
         ToolStripButton clickedButton = sender as ToolStripButton;
@@ -1441,15 +1532,12 @@ public class MainForm : Form
             // Assign active data vectors over to viewport canvas properties
             glViewport.NodeDisplacements = dataset;
             glViewport.ShowDeformed = (targetBlockName == "DISP");
-            glViewport.ShowNodes = true;
+            glViewport.ShowNodes = false;
 
             // Trigger complete viewport context redraw paint executions
             glViewport.Invalidate();
         }
     }
-
-
-
 
     private void BtnOpenStl_Click(object sender, EventArgs e)
     {
@@ -1746,7 +1834,6 @@ public class MainForm : Form
         }
         return bmp;
     }
-
         
     private void OpenMenuItem_Click(object sender, EventArgs e)
     {
@@ -1785,20 +1872,18 @@ public class MainForm : Form
         activeView = view;
         switch (view)
         {
-            case "Front":  glViewport.SetView(0.0,0.0); break;
-            case "Back":   glViewport.SetView(0.0,Math.PI); break;
-            case "Right":  glViewport.SetView(0.0,-Math.PI/2.0); break;
-            case "Left":   glViewport.SetView(0.0,Math.PI/2.0); break;
-            case "Top":    glViewport.SetView(Math.PI/2.0,0.0); break;
-            case "Bottom": glViewport.SetView(-Math.PI,0.0); break;
-            case "Iso":    glViewport.SetView(0.6154797,-Math.PI/4.0); break;
+            case "Front":  glViewport.SetView(0.0, 0.0); break;
+            case "Back":   glViewport.SetView(0.0, Math.PI); break;
+            case "Right":  glViewport.SetView(0.0, -Math.PI / 2.0); break;
+            case "Left":   glViewport.SetView(0.0, Math.PI / 2.0); break;
+            case "Top":    glViewport.SetView(Math.PI / 2.0, 0.0); break;
+            case "Bottom": glViewport.SetView(-Math.PI / 2.0, 0.0); break; // Fixed from -Math.PI
+            case "Iso":    glViewport.SetView(0.6154797, -Math.PI / 4.0); break;
         }
         UpdateToolbarSelection();
-        //viewportPanel.Invalidate();
         Invalidate();
     }
-    
-    
+        
     private void UpdateToolbarSelection()
     {
         foreach (ToolStripItem item in toolStrip.Items)
@@ -1810,7 +1895,6 @@ public class MainForm : Form
             }
         }
     }
-
 
     [STAThread]
     static void Main()
