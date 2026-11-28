@@ -516,30 +516,48 @@ public class FrdMesh
             }
 
             // 2. Process active block mode payloads
-            if (mode == 2 && header == "-1")
+            else if (mode == 2 && header == "-1")
             {
-                // Separate glued minus signs (e.g. "1.23E+00-4.56E+00") while preserving "E-"
-                string payload = line.Substring(3)
-                    .Replace("E-", "E_").Replace("e-", "e_")
-                    .Replace("-", " -")
-                    .Replace("E_", "E-").Replace("e_", "e-");
-
-                string[] parts = payload.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-
-                int id;
-                float x, y, z;
-                if (parts.Length >= 4 &&
-                    int.TryParse(parts[0], out id) &&
-                    float.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out x) &&
-                    float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out y) &&
-                    float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out z))
+                try
                 {
-                    mesh.Nodes[id] = new[] { x, y, z };
-                    if (x < min[0]) min[0] = x; if (x > max[0]) max[0] = x;
-                    if (y < min[1]) min[1] = y; if (y > max[1]) max[1] = y;
-                    if (z < min[2]) min[2] = z; if (z > max[2]) max[2] = z;
+                    // -1      1028-5.00000E-08 1.08333E+00 6.25000E-02
+                    // 1. Isolate the token segments cleanly based on rigid .frd column allocations
+                    // Format layout: Node ID (cols 3-12), X (cols 13-24), Y (cols 25-36), Z (cols 37-48)
+                    string idStr = line.Substring(3, Math.Min(10, line.Length - 3)).Trim();
+                    if (idStr=="1667") {Console.WriteLine(idStr);}
+                    
+                    int id;
+                    if (int.TryParse(idStr, out id))
+                    {
+                        if (idStr=="1667") {Console.WriteLine("id = {0}",id);}
+                        string xStr = line.Substring(13, Math.Min(12, line.Length - 13)).Trim();
+                        string yStr = (line.Length > 25) ? line.Substring(25, Math.Min(12, line.Length - 25)).Trim() : "0.0";
+                        string zStr = (line.Length > 37) ? line.Substring(37, Math.Min(12, line.Length - 37)).Trim() : "0.0";
+                        if (idStr=="1667") 
+                        {
+                            Console.WriteLine(xStr);
+                            Console.WriteLine(yStr);
+                            Console.WriteLine(zStr);
+                        }
+
+                        // 2. Parse values securely utilizing absolute InvariantCulture formatting profiles
+                        float x = float.Parse(xStr, NumberStyles.Float, CultureInfo.InvariantCulture);
+                        float y = float.Parse(yStr, NumberStyles.Float, CultureInfo.InvariantCulture);
+                        float z = float.Parse(zStr, NumberStyles.Float, CultureInfo.InvariantCulture);
+
+                        mesh.Nodes[id] = new float[] { x, y, z };
+
+                        if (x < min[0]) min[0] = x; if (x > max[0]) max[0] = x;
+                        if (y < min[1]) min[1] = y; if (y > max[1]) max[1] = y;
+                        if (z < min[2]) min[2] = z; if (z > max[2]) max[2] = z;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Error parsing fixed-width node row assignment: " + ex.Message);
                 }
             }
+            
             else if (mode == 3)
             {
                 if (header == "-1")
@@ -675,6 +693,17 @@ public class bjOpenGLViewport : Control
 
 
     // Native Windows OpenGL P/Invoke declarations (zero external DLL dependencies)
+    [DllImport("opengl32.dll")]
+    private static extern bool wglUseFontBitmaps(IntPtr hdc, uint first, uint count, uint listBase);
+
+    [DllImport("opengl32.dll")]
+    private static extern void glListBase(uint listBase);
+
+    [DllImport("opengl32.dll")]
+    private static extern void glCallLists(int n, uint type, string s);
+
+    [DllImport("opengl32.dll")]
+    private static extern void glRasterPos2i(int x, int y);
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetDC(IntPtr hWnd);
@@ -836,6 +865,8 @@ public class bjOpenGLViewport : Control
     public bool ShowDeformed { get; set; }
 
     public bool ShowNodes { get; set; } 
+    public bool ShowNodeNumbers { get; set; }
+
     
     private void ApplyColorMap(double value)
     {
@@ -1066,33 +1097,38 @@ public class bjOpenGLViewport : Control
         Invalidate();
     }
     
-    // Local state variables to track within the viewport class or method
-    private double minResultVal = 0.0;
-    private double maxResultVal = 1.0;
+private double dataMinVal = 0.0;
+private double dataMaxVal = 0.0;
+private uint fontListBase = 0;
+private bool fontInitialized = false;
 
-    private void ComputeResultBounds()
+// Call this method inside your existing SetFrdMesh method right after processing node results
+private void ComputeResultBounds()
+{
+    if (NodeDisplacements == null || NodeDisplacements.Count == 0)
     {
-        if (NodeDisplacements == null || NodeDisplacements.Count == 0) return;
-
-        double minVal = double.MaxValue;
-        double maxVal = double.MinValue;
-
-        foreach (var kvp in NodeDisplacements)
-        {
-            float[] vec = kvp.Value;
-            if (vec == null || vec.Length < 3) continue;
-
-            // Calculate 3D magnitude (hypotenuse)
-            double mag = Math.Sqrt(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
-
-            if (mag < minVal) minVal = mag;
-            if (mag > maxVal) maxVal = mag;
-        }
-
-        // Prevent divide-by-zero on uniform results distributions
-        minResultVal = minVal;
-        maxResultVal = (maxVal - minVal > 1e-9) ? maxVal : minVal + 1.0;
+        dataMinVal = 0.0;
+        dataMaxVal = 0.0;
+        return;
     }
+
+    double minMag = double.MaxValue;
+    double maxMag = double.MinValue;
+
+    foreach (var entry in NodeDisplacements.Values)
+    {
+        if (entry.Length >= 3)
+        {
+            // Calculate absolute displacement magnitude: sqrt(dx^2 + dy^2 + dz^2)
+            double mag = Math.Sqrt(entry[0] * entry[0] + entry[1] * entry[1] + entry[2] * entry[2]);
+            if (mag < minMag) minMag = mag;
+            if (mag > maxMag) maxMag = mag;
+        }
+    }
+
+    dataMinVal = minMag == double.MaxValue ? 0.0 : minMag;
+    dataMaxVal = maxMag == double.MinValue ? 0.0 : maxMag;
+}
 
 
     protected override void OnPaint(PaintEventArgs e)
@@ -1178,6 +1214,71 @@ public class bjOpenGLViewport : Control
                 }
                 glEnd();
             }
+            
+            if (!ShowNodeNumbers || currentMesh == null || currentMesh.Nodes == null) return;
+
+            // Isolate context states: temporarily swap to 2D Orthographic layout over the 3D view
+            glMatrixMode(0x1701); // GL_PROJECTION
+            glPushMatrix();
+            glLoadIdentity();
+            glOrtho(0.0, (double)this.Width, 0.0, (double)this.Height, -1.0, 1.0);
+
+            glMatrixMode(0x1700); // GL_MODELVIEW
+            glPushMatrix();
+            glLoadIdentity();
+
+            glDisable(0x0B71); // Disable GL_DEPTH_TEST so numbers don't clip behind elements
+
+            // Cache math coefficients directly from the active camera rotation values 
+            double cosX = Math.Cos(rotX);
+            double sinX = Math.Sin(rotX);
+            double cosY = Math.Cos(rotY);
+            double sinY = Math.Sin(rotY);
+
+            double halfW = this.Width / 2.0;
+            double halfH = this.Height / 2.0;
+
+            foreach (var kvp in currentMesh.Nodes)
+            {
+                int nodeId = kvp.Key;
+                var node = kvp.Value;
+
+                // 1. Shift node coordinates relative to model geometric center
+                double nx = (node.X - currentMesh.CenterX) * currentMesh.Scale;
+                double ny = (node.Y - currentMesh.CenterY) * currentMesh.Scale;
+                double nz = (node.Z - currentMesh.CenterZ) * currentMesh.Scale;
+
+                // 2. Perform manual 3D Matrix transform matching glRotated viewport settings
+                // Yaw (rotY around Y-axis)
+                double rx1 = nx * cosY + nz * sinY;
+                double ry1 = ny;
+                double rz1 = -nx * sinY + nz * cosY;
+
+                // Pitch (rotX around X-axis)
+                double rx2 = rx1;
+                double ry2 = ry1 * cosX - rz1 * sinX;
+                double rz2 = ry1 * sinX + rz1 * cosX;
+
+                // 3. Orthographic screen-space perspective projection flattening
+                // Scale and shift coordinates directly into absolute screen frame pixel positions
+                int screenX = (int)(halfW + rx2 * (halfH / (zoomDistance * 0.4)));
+                int screenY = (int)(halfH + ry2 * (halfH / (zoomDistance * 0.4)));
+
+                // Only draw label strings if they fall inside the visible viewport borders
+                if (screenX > 0 && screenX < this.Width && screenY > 0 && screenY < this.Height)
+                {
+                    // Call your white text renderer. Added small +3px padding offset to place text neatly beside the node dot
+                    RenderText(nodeId.ToString(), screenX + 3, screenY + 3);
+                }
+            }
+
+            // Clean up stack context: return gracefully back to standard perspective configuration
+            glEnable(0x0B71); // Re-enable GL_DEPTH_TEST
+            glMatrixMode(0x1701);
+            glPopMatrix();
+            glMatrixMode(0x1700);
+            glPopMatrix();
+            
         
             // Draw Shaded 3D Exterior Faces
             if (currentMesh.SurfaceTriangles != null && currentMesh.SurfaceTriangles.Count > 0)
@@ -1233,17 +1334,17 @@ public class bjOpenGLViewport : Control
                     //glVertex3d(x2, y2, z2);
                     // Vertex 0 Color and Position
                     double mag0 = GetNodeMagnitude(n0.Id);
-                    ApplyColorMap((mag0 - minResultVal) / (maxResultVal - minResultVal));
+                    ApplyColorMap((mag0 - dataMinVal) / (dataMaxVal - dataMinVal));
                     glVertex3d(x0, y0, z0);
 
                     // Vertex 1 Color and Position
                     double mag1 = GetNodeMagnitude(n1.Id);
-                    ApplyColorMap((mag1 - minResultVal) / (maxResultVal - minResultVal));
+                    ApplyColorMap((mag1 - dataMinVal) / (dataMaxVal - dataMinVal));
                     glVertex3d(x1, y1, z1);
 
                     // Vertex 2 Color and Position
                     double mag2 = GetNodeMagnitude(n2.Id);
-                    ApplyColorMap((mag2 - minResultVal) / (maxResultVal - minResultVal));
+                    ApplyColorMap((mag2 - dataMinVal) / (dataMaxVal - dataMinVal));
                     glVertex3d(x2, y2, z2);                    
                 }
                 glEnd();
@@ -1263,24 +1364,50 @@ public class bjOpenGLViewport : Control
         b = Math.Max(0.0f, Math.Min(1.0f, 2.0f - 4.0f * value));
     }
     
+
+    private void RenderText(string text, int x, int y)
+    {
+        // Initialize standard Windows system display lists on the fly if not yet set up
+        if (!fontInitialized && hdc != IntPtr.Zero)
+        {
+            fontListBase = 1000; // Choose a safe out-of-way starting display list ID
+            wglUseFontBitmaps(hdc, 32, 96, fontListBase); // Map standard ASCII set
+            fontInitialized = true;
+        }
+
+        if (fontInitialized)
+        {
+            // Set the active rendering color to pure white
+            glColor3f(1.0f, 1.0f, 1.0f);
+
+            glRasterPos2i(x, y); // Position the drawing cursor in screen pixels
+            glListBase(fontListBase - 32);
+            glCallLists(text.Length, 0x1401, text); // 0x1401 is GL_UNSIGNED_BYTE
+        }
+    }
+
     private void DrawColorbar(int width, int height)
     {
-        // Disable depth testing (0x0B71) so it paints over the 3D model
-        glDisable(0x0B71);
+        // 1. Temporarily switch OpenGL context matrix layout to 2D Orthographic overlay
+        glMatrixMode(0x1701); // GL_PROJECTION
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0.0, (double)width, 0.0, (double)height, -1.0, 1.0);
 
-        // 1. Convert screen pixels to normalized OpenGL coordinate space (-1.0 to 1.0)
-        // Avoids using glOrtho completely!
-        float barWidthNorm = 20.0f / (width / 2.0f);
-        float barHeightNorm = (height * 0.5f) / (height / 2.0f);
-        
-        // Position on right side with a 40px offset
-        float startXNorm = (width - 20.0f - 40.0f) / (width / 2.0f) - 1.0f;
-        float startYNorm = - (height * 0.5f / 2.0f) / (height / 2.0f);
+        glMatrixMode(0x1700); // GL_MODELVIEW
+        glPushMatrix();
+        glLoadIdentity(); 
 
-        // 2. Render continuous vertical color strips using 3D commands
-        // 0x0008 is GL_QUAD_STRIP
-        glBegin(0x0008); 
-        
+        glDisable(0x0B71); // Disable GL_DEPTH_TEST
+
+        // 2. Define dimensions (Right edge anchor)
+        int barWidth = 20;
+        int barHeight = (int)(height * 0.5);   // 50% of window screen height
+        int startX = width - barWidth - 80;    // Increased padding to 80px to accommodate texts comfortably
+        int startY = (height - barHeight) / 2; // Vertically centered
+
+        // 3. Render continuous vertical color strips
+        glBegin(0x0008); // GL_QUAD_STRIP
         float r, g, b;
         int segments = 32;
         for (int i = 0; i <= segments; i++)
@@ -1288,32 +1415,45 @@ public class bjOpenGLViewport : Control
             float t = (float)i / segments;
             GetRainbowColor(t, out r, out g, out b);
 
-            float currentY = startYNorm + (t * barHeightNorm);
+            float currentY = (float)startY + (t * barHeight);
 
             glColor3f(r, g, b);
-            
-            // Use the exact vertex variant available in your file
-            // Try glVertex3f first. If it errors, change it to glVertex3d
-            glVertex3f(startXNorm, currentY, 0.0f);
-            glVertex3f(startXNorm + barWidthNorm, currentY, 0.0f);
+            glVertex3f((float)startX, currentY, 0.0f);
+            glVertex3f((float)(startX + barWidth), currentY, 0.0f);
         }
         glEnd();
 
-        // 3. Draw a crisp boundary border ring around the bar
+        // 4. Draw a solid black boundary ring layout around the bar
         glColor3f(0.0f, 0.0f, 0.0f);
         glLineWidth(1.0f);
-        
-        // 0x0002 is GL_LINE_LOOP
-        glBegin(0x0002); 
-        glVertex3f(startXNorm, startYNorm, 0.0f);
-        glVertex3f(startXNorm + barWidthNorm, startYNorm, 0.0f);
-        glVertex3f(startXNorm + barWidthNorm, startYNorm + barHeightNorm, 0.0f);
-        glVertex3f(startXNorm, startYNorm + barHeightNorm, 0.0f);
+        glBegin(0x0002); // GL_LINE_LOOP
+        glVertex3f((float)startX, (float)startY, 0.0f);
+        glVertex3f((float)(startX + barWidth), (float)startY, 0.0f);
+        glVertex3f((float)(startX + barWidth), (float)(startY + barHeight), 0.0f);
+        glVertex3f((float)startX, (float)(startY + barHeight), 0.0f);
         glEnd();
 
-        // 4. Re-enable depth testing
+        // 5. Output Numeric Data Values dynamically alongside the segments
+        // Formatted cleanly in FEA standard engineering scientific notation (e.g., 1.234e-03)
+        string minText = dataMinVal.ToString("e3", CultureInfo.InvariantCulture);
+        string midText = ((dataMinVal + dataMaxVal) * 0.5).ToString("e3", CultureInfo.InvariantCulture);
+        string maxText = dataMaxVal.ToString("e3", CultureInfo.InvariantCulture);
+
+        int textX = startX + barWidth + 8; // Offset numbers 8px to the right of the bar
+
+        RenderText(maxText, textX, startY + barHeight - 5); // Max value at top
+        RenderText(midText, textX, startY + (barHeight / 2) - 5); // Mid value at center
+        RenderText(minText, textX, startY - 5); // Min value at bottom
+
+        // 6. Restore matrix stack variables seamlessly back to normal
         glEnable(0x0B71); 
+        glMatrixMode(0x1701);
+        glPopMatrix();
+        glMatrixMode(0x1700);
+        glPopMatrix();
     }
+    
+    
         
     private double GetNodeMagnitude(int nodeId)
     {
@@ -1407,6 +1547,16 @@ public class MainForm : Form
             glViewport.Invalidate();
         };
         viewMenu.DropDownItems.Add(toggleNodesItem);
+        
+        ToolStripMenuItem toggleNodeLabelsItem = new ToolStripMenuItem("Show &Node Labels");
+        toggleNodeLabelsItem.CheckOnClick = true;
+        toggleNodeLabelsItem.Checked = true;
+        toggleNodeLabelsItem.CheckedChanged += (s, e) =>
+        {
+            glViewport.ShowNodeNumbers = toggleNodeLabelsItem.Checked;
+            glViewport.Invalidate();
+        };
+        viewMenu.DropDownItems.Add(toggleNodeLabelsItem);
 
         menuStrip.Items.Add(fileMenu);
         menuStrip.Items.Add(viewMenu);
@@ -1532,7 +1682,7 @@ public class MainForm : Form
             // Assign active data vectors over to viewport canvas properties
             glViewport.NodeDisplacements = dataset;
             glViewport.ShowDeformed = (targetBlockName == "DISP");
-            glViewport.ShowNodes = false;
+            //glViewport.ShowNodes = false;
 
             // Trigger complete viewport context redraw paint executions
             glViewport.Invalidate();
