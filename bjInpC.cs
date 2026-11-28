@@ -566,7 +566,8 @@ public class FrdMesh
                     currentNodes.Clear();
 
                     // Format: -1 <elemId> <elemType> <group> <material>
-                    string[] parts = line.Substring(3).Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    //string[] parts = line.Substring(3).Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    string[] parts = line.Substring(3).Split(new[] { ' ', '\t', ',' }, StringSplitOptions.RemoveEmptyEntries);
                     if (parts.Length >= 2)
                     {
                         int.TryParse(parts[1], out currentElemType);
@@ -575,7 +576,8 @@ public class FrdMesh
                 else if (header == "-2")
                 {
                     // Format: -2 <n1> <n2> ...
-                    string[] parts = line.Substring(3).Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    //string[] parts = line.Substring(3).Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    string[] parts = line.Substring(3).Split(new[] { ' ', '\t', ',' }, StringSplitOptions.RemoveEmptyEntries);
                     foreach (string tok in parts)
                     {
                         int nid;
@@ -981,6 +983,14 @@ public class bjOpenGLViewport : Control
             this.NodeDisplacements = new Dictionary<int, float[]>();
             this.ShowDeformed = false;
             this.DisplacementScaleFactor = 1.0f;
+        }
+        
+        if (frd.NodalResults.Count > 0 && !frd.NodalResults.ContainsKey("DISP")) 
+        {
+            // Fallback to the first parsed data block if DISP is absent
+            var firstKey = new List<string>(frd.NodalResults.Keys)[0];
+            dispBlock = frd.NodalResults[firstKey];
+            this.ShowDeformed = true; 
         }
 
         // 5. Compute geometry properties and layout boundaries
